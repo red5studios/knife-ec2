@@ -189,6 +189,11 @@ class Chef
         :proc => Proc.new { |m| Chef::Config[:knife][:aws_user_data] = m },
         :default => nil
 
+      option :allocate_ip,
+        :long => "--allocate_ip IP_ADDRESS",
+        :description => "Set the private IP for the instance during launch (**VPC ONLY**)"
+
+      Chef::Config[:knife][:hints] ||= {"ec2" => {}}
       option :hint,
         :long => "--hint HINT_NAME[=HINT_FILE]",
         :description => "Specify Ohai Hint to be set on the bootstrap target.  Use multiple --hint options to specify multiple hints.",
@@ -447,6 +452,7 @@ class Chef
           :availability_zone => locate_config_value(:availability_zone)
         }
         server_def[:subnet_id] = locate_config_value(:subnet_id) if vpc_mode?
+        server_def[:private_ip_address] = locate_config_value(:allocate_ip) if vpc_mode?
 
         if Chef::Config[:knife][:aws_user_data]
           begin
