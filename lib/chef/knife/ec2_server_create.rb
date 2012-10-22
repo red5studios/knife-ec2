@@ -1,4 +1,4 @@
-#
+v#
 # Author:: Adam Jacob (<adam@opscode.com>)
 # Author:: Seth Chisamore (<schisamo@opscode.com>)
 # Copyright:: Copyright (c) 2010-2011 Opscode, Inc.
@@ -215,6 +215,13 @@ class Chef
         :description => "The EC2 server attribute to use for SSH connection",
         :default => nil
 
+      option :uniquify,
+        :long => "--uniquify",
+        :short => "-U",
+        :description => "Append the unique portion of the server ID to the Name",
+        :boolean => true,
+        :default => false
+
       def tcp_test_ssh(hostname, ssh_port)
         tcp_socket = TCPSocket.new(hostname, ssh_port)
         readable = IO.select([tcp_socket], nil, nil, 5)
@@ -261,6 +268,11 @@ class Chef
         # Always set the Name tag
         unless hashed_tags.keys.include? "Name"
           hashed_tags["Name"] = locate_config_value(:chef_node_name) || @server.id
+        end
+
+        # Append the server in order to guarantee a unique name.
+        if config[:uniquify]
+          hashed_tags["Name"] << @server.id.split('-')[1]
         end
 
         hashed_tags.each_pair do |key,val|
