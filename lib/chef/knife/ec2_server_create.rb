@@ -1,4 +1,4 @@
-v#
+#
 # Author:: Adam Jacob (<adam@opscode.com>)
 # Author:: Seth Chisamore (<schisamo@opscode.com>)
 # Copyright:: Copyright (c) 2010-2011 Opscode, Inc.
