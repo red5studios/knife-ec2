@@ -275,6 +275,11 @@ class Chef
           hashed_tags["Name"] << @server.id.split('-')[1]
         end
 
+        # Add the node_name user from the knife.rb file (Makes it easy to track down who built it)
+        unless hashed_tags.keys.include? "Creator"
+          hashed_tags["Creator"] = Chef::Config[:node_name] || ""
+        end
+
         hashed_tags.each_pair do |key,val|
           connection.tags.create :key => key, :value => val, :resource_id => @server.id
         end
