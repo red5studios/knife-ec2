@@ -275,9 +275,16 @@ class Chef
           hashed_tags["Name"] << @server.id.split('-')[1]
         end
 
-        # Add the node_name user from the knife.rb file (Makes it easy to track down who built it)
-        unless hashed_tags.keys.include? "Creator"
-          hashed_tags["Creator"] = Chef::Config[:node_name] || ""
+        # Add creator to ec2 tags list and to first boot json attributes but
+        # do not overwrite if they are already set.
+        creator = {"Creator" => Chef::Config[:node_name] || ""}
+
+        hashed_tags.merge!(creator) { |key, val1,val2| val1}
+
+        if config.has_key? :json_attributes
+          config[:json_attributes].merge!(creator) { |key, v1,v2| v1}
+        else
+          config[:json_attributes] = creator
         end
 
         hashed_tags.each_pair do |key,val|
