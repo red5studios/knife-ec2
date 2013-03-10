@@ -198,6 +198,7 @@ class Chef
         :long => "--hint HINT_NAME[=HINT_FILE]",
         :description => "Specify Ohai Hint to be set on the bootstrap target.  Use multiple --hint options to specify multiple hints.",
         :proc => Proc.new { |h|
+           Chef::Config[:knife][:hints] ||= {}
            name, path = h.split("=")
            Chef::Config[:knife][:hints][name] = path ? JSON.parse(::File.read(path)) : Hash.new
         }
@@ -402,6 +403,10 @@ class Chef
         bootstrap.config[:environment] = config[:environment]
         # may be needed for vpc_mode
         bootstrap.config[:host_key_verify] = config[:host_key_verify]
+        # Modify global configuration state to ensure hint gets set by
+        # knife-bootstrap
+        Chef::Config[:knife][:hints] ||= {}
+        Chef::Config[:knife][:hints]["ec2"] ||= {}
         bootstrap
       end
 
