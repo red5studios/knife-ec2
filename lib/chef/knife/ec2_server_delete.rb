@@ -45,6 +45,13 @@ class Chef
         :long => "--node-name NAME",
         :description => "The name of the node and client to delete, if it differs from the server name.  Only has meaning when used with the '--purge' option."
 
+      option :release_eip,
+        :short => "-R",
+        :long => "--release-eip",
+        :boolean => true,
+        :default => false,
+        :description => "Release the attached Elastic IP Address during termination."
+
       # Extracted from Chef::Knife.delete_object, because it has a
       # confirmation step built in... By specifying the '--purge'
       # flag (and also explicitly confirming the server destruction!)
@@ -57,6 +64,35 @@ class Chef
           ui.warn("Deleted #{type_name} #{name}")
         rescue Net::HTTPServerException
           ui.warn("Could not find a #{type_name} named #{name} to delete!")
+        end
+      end
+
+      def release_eip(ip_address)
+        begin
+          eip = connection.addresses.get(ip_address)
+
+          # Disassociating EIP's in vpc requires public_ip to be nil
+          public_ip = eip.domain == "vpc" ? nil : eip.public_ip
+
+          confirm("Do you really want to release the Elastic IP \"#{ip_address}\" with allocation_id \"#{eip.allocation_id}\"")
+
+          # Check to ensure we are not allocated, or allocated to this server
+          unless eip.server_id == nil or eip.server_id == @server.id
+            ui.error("Server id \"#{eip.server_id}\" is associated with this elastic ip. We cannot delete it.")
+            exit 1
+          end
+          association_id = eip.attributes.fetch("associationId", nil)
+          connection.disassociate_address(public_ip, association_id)
+          ui.info("Waiting for Elastic IP to Disassociate")
+          eip.wait_for { print '.'; server_id == nil }
+          puts
+          eip.destroy
+
+          ui.warn("Released Elastic IP #{ip_address}")
+
+        rescue Fog::Compute::AWS::Error => e
+          ui.error("Failed to release elastic IP: #{e.message}")
+          return false
         end
       end
 
@@ -85,6 +121,13 @@ class Chef
             puts "\n"
             confirm("Do you really want to delete this server")
 
+            # Release the Elastic IP if it's asked of us
+            if config[:release_eip]
+              release_eip(@server.public_ip_address)
+            else
+              ui.warn("Elastic IP address not released.") unless server.public_ip.nil?
+            end
+
             @server.destroy
 
             ui.warn("Deleted server #{@server.id}")
@@ -97,8 +140,8 @@ class Chef
               ui.warn("Corresponding node and client for the #{instance_id} server were not deleted and remain registered with the Chef Server")
             end
 
-          rescue NoMethodError
-            ui.error("Could not locate server '#{instance_id}'.  Please verify it was provisioned in the '#{locate_config_value(:region)}' region.")
+          rescue NoMethodError => e
+            ui.error("Could not locate server '#{instance_id}'.  Please verify it was provisioned in the '#{locate_config_value(:region)}' region: #{e}")
           end
         end
       end
