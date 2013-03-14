@@ -125,7 +125,7 @@ class Chef
             if config[:release_eip]
               release_eip(@server.public_ip_address)
             else
-              ui.warn("Elastic IP address not released.") unless server.public_ip.nil?
+              ui.warn("Elastic IP address not released.") unless @server.public_ip_address.nil?
             end
 
             @server.destroy
@@ -141,7 +141,7 @@ class Chef
             end
 
           rescue NoMethodError => e
-            ui.error("Could not locate server '#{instance_id}'.  Please verify it was provisioned in the '#{locate_config_value(:region)}' region: #{e}")
+            ui.error("Error while trying to delete'#{instance_id}': #{e}")
           end
         end
       end
