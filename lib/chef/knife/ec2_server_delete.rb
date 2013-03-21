@@ -69,6 +69,7 @@ class Chef
 
       def release_eip(ip_address)
         begin
+          ui.info("Searching for EIP: #{ip_address}")
           eip = connection.addresses.get(ip_address)
 
           # Disassociating EIP's in vpc requires public_ip to be nil
@@ -122,10 +123,10 @@ class Chef
             confirm("Do you really want to delete this server")
 
             # Release the Elastic IP if it's asked of us
-            if config[:release_eip]
+            if config[:release_eip] and @server.public_ip_address != nil
               release_eip(@server.public_ip_address)
             else
-              ui.warn("Elastic IP address not released.") unless server.public_ip.nil?
+              ui.warn("Elastic IP address not released.") unless @server.public_ip_address.nil?
             end
 
             @server.destroy
@@ -141,7 +142,7 @@ class Chef
             end
 
           rescue NoMethodError => e
-            ui.error("Could not locate server '#{instance_id}'.  Please verify it was provisioned in the '#{locate_config_value(:region)}' region: #{e}")
+            ui.error("Error while trying to delete'#{instance_id}': #{e}")
           end
         end
       end
