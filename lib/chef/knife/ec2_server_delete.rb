@@ -123,7 +123,7 @@ class Chef
             confirm("Do you really want to delete this server")
 
             # Release the Elastic IP if it's asked of us
-            if config[:release_eip] && @server.public_ip_address != nil
+            if config[:release_eip] and @server.public_ip_address != nil
               release_eip(@server.public_ip_address)
             else
               ui.warn("Elastic IP address not released.") unless @server.public_ip_address.nil?
