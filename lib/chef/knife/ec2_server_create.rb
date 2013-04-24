@@ -262,6 +262,8 @@ class Chef
 
         @server = connection.servers.create(create_server_def)
 
+        @server.wait_for { state == 'pending' || state == 'running' }
+
         hashed_tags={}
         tags.map{ |t| key,val=t.split('='); hashed_tags[key]=val} unless tags.nil?
 
