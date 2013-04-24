@@ -287,10 +287,6 @@ class Chef
           config[:json_attributes] = creator
         end
 
-        hashed_tags.each_pair do |key,val|
-          connection.tags.create :key => key, :value => val, :resource_id => @server.id
-        end
-
         msg_pair("Instance ID", @server.id)
         msg_pair("Flavor", @server.flavor_id)
         msg_pair("Image", @server.image_id)
@@ -317,9 +313,15 @@ class Chef
         # wait for it to be ready to do stuff
         @server.wait_for { print "."; ready? }
 
-        if config[:associate_eip] || config[:associate_new_eip]
-          connection.associate_address(server.id, elastic_ip.public_ip, nil, elastic_ip.allocation_id)
-          @server.wait_for { public_ip_address == elastic_ip.public_ip }
+        tries = 6
+        begin
+          create_tags(hashed_tags) unless hashed_tags.empty?
+          associate_eip(elastic_ip) if (config[:associate_eip] || config[:allocate_new_ip])
+        rescue Fog::Compute::AWS::NotFound => e
+          raise if (tries -= 1) <= 0
+          ui.warn("Server not ready yet, retrying action (retries left: #{tries})")
+          sleep 5
+          retry
         end
 
         puts("\n")
@@ -567,6 +569,17 @@ class Chef
         else
           vpc_mode? ? server.private_ip_address : server.dns_name
         end
+      end
+
+      def create_tags(hashed_tags)
+        hashed_tags.each_pair do |key,val|
+          connection.tags.create :key => key, :value => val, :resource_id => @server.id
+        end
+      end
+
+      def associate_eip(elastic_ip)
+        connection.associate_address(server.id, elastic_ip.public_ip, nil, elastic_ip.allocation_id)
+        @server.wait_for { public_ip_address == elastic_ip.public_ip }
       end
     end
   end
