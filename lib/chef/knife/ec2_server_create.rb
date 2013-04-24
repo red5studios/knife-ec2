@@ -62,6 +62,16 @@ class Chef
         :description => "The security group ids for this server; required when using VPC",
         :proc => Proc.new { |security_group_ids| security_group_ids.split(',') }
 
+      option :associate_eip,
+        :long => "--associate-eip IP_ADDRESS",
+        :description => "Associate existing elastic IP address with instance after launch"
+
+      option :associate_new_eip,
+        :long => "--associate-new-eip",
+        :description => "Allocate new elastic IP address and associate with instance after launch",
+        :boolean => true,
+        :default => false
+
       option :tags,
         :short => "-T T=V[,T=V,...]",
         :long => "--tags Tag=Value[,Tag=Value...]",
@@ -109,7 +119,6 @@ class Chef
         :long => "--ssh-gateway GATEWAY",
         :description => "The ssh gateway server",
         :proc => Proc.new { |key| Chef::Config[:knife][:ssh_gateway] = key }
-
 
       option :identity_file,
         :short => "-i IDENTITY_FILE",
@@ -180,11 +189,16 @@ class Chef
         :proc => Proc.new { |m| Chef::Config[:knife][:aws_user_data] = m },
         :default => nil
 
+      option :allocate_ip,
+        :long => "--allocate_ip IP_ADDRESS",
+        :description => "Set the private IP for the instance during launch (**VPC ONLY**)"
+
       Chef::Config[:knife][:hints] ||= {"ec2" => {}}
       option :hint,
         :long => "--hint HINT_NAME[=HINT_FILE]",
         :description => "Specify Ohai Hint to be set on the bootstrap target.  Use multiple --hint options to specify multiple hints.",
         :proc => Proc.new { |h|
+           Chef::Config[:knife][:hints] ||= {}
            name, path = h.split("=")
            Chef::Config[:knife][:hints][name] = path ? JSON.parse(::File.read(path)) : Hash.new
         }
@@ -200,6 +214,13 @@ class Chef
         :short => "-a ATTRIBUTE",
         :description => "The EC2 server attribute to use for SSH connection",
         :default => nil
+
+      option :uniquify,
+        :long => "--uniquify",
+        :short => "-U",
+        :description => "Append the unique portion of the server ID to the Name",
+        :boolean => true,
+        :default => false
 
       def tcp_test_ssh(hostname, ssh_port)
         tcp_socket = TCPSocket.new(hostname, ssh_port)
@@ -225,7 +246,23 @@ class Chef
 
         validate!
 
+        requested_elastic_ip = config[:associate_eip] if config[:associate_eip]
+
+        if config[:associate_new_eip]
+          begin
+            requested_elastic_ip = connection.allocate_address(eip_scope).body["publicIp"]
+          rescue Fog::Compute::AWS::Error => e
+            ui.error("Failed to allocate elastic IP: #{e.message}")
+            exit 1
+          end
+        end
+
+        # For VPC EIP assignment we need the allocation ID so fetch full EIP details
+        elastic_ip = connection.addresses.detect{|addr| addr if addr.public_ip == requested_elastic_ip}
+
         @server = connection.servers.create(create_server_def)
+
+        @server.wait_for { state == 'pending' || state == 'running' }
 
         hashed_tags={}
         tags.map{ |t| key,val=t.split('='); hashed_tags[key]=val} unless tags.nil?
@@ -233,6 +270,23 @@ class Chef
         # Always set the Name tag
         unless hashed_tags.keys.include? "Name"
           hashed_tags["Name"] = locate_config_value(:chef_node_name) || @server.id
+        end
+
+        # Append the server in order to guarantee a unique name.
+        if config[:uniquify]
+          hashed_tags["Name"] << @server.id.split('-')[1]
+        end
+
+        # Add creator to ec2 tags list and to first boot json attributes but
+        # do not overwrite if they are already set.
+        creator = {"Creator" => Chef::Config[:node_name] || ""}
+
+        hashed_tags.merge!(creator) { |key, val1,val2| val1}
+
+        if config.has_key? :json_attributes
+          config[:json_attributes].merge!(creator) { |key, v1,v2| v1}
+        else
+          config[:json_attributes] = creator
         end
 
         hashed_tags.each_pair do |key,val|
@@ -265,10 +319,18 @@ class Chef
         # wait for it to be ready to do stuff
         @server.wait_for { print "."; ready? }
 
+        if config[:associate_eip] || config[:associate_new_eip]
+          connection.associate_address(server.id, elastic_ip.public_ip, nil, elastic_ip.allocation_id)
+          @server.wait_for { public_ip_address == elastic_ip.public_ip }
+        end
+
         puts("\n")
 
         if vpc_mode?
           msg_pair("Subnet ID", @server.subnet_id)
+          if elastic_ip
+            msg_pair("Public IP Address", @server.public_ip_address)
+          end
         else
           msg_pair("Public DNS Name", @server.dns_name)
           msg_pair("Public IP Address", @server.public_ip_address)
@@ -343,6 +405,10 @@ class Chef
         bootstrap.config[:environment] = config[:environment]
         # may be needed for vpc_mode
         bootstrap.config[:host_key_verify] = config[:host_key_verify]
+        # Modify global configuration state to ensure hint gets set by
+        # knife-bootstrap
+        Chef::Config[:knife][:hints] ||= {}
+        Chef::Config[:knife][:hints]["ec2"] ||= {}
         bootstrap
       end
 
@@ -370,6 +436,19 @@ class Chef
           exit 1
         end
 
+        if config[:associate_eip] && config[:associate_new_eip]
+          ui.error("You cannot associate an existing EIP and allocate/associate a new EIP simultaneously.")
+          exit 1
+        end
+
+        if config[:associate_eip]
+          eips = connection.addresses.collect{|addr| addr if addr.domain == eip_scope}.compact
+
+          unless eips.detect{|addr| addr.public_ip == config[:associate_eip] && addr.server_id == nil}
+            ui.error("Elastic IP requested is not available.")
+            exit 1
+          end
+        end
       end
 
       def tags
@@ -379,6 +458,14 @@ class Chef
           exit 1
         end
        tags
+      end
+
+      def eip_scope
+        if vpc_mode?
+          "vpc"
+        else
+          "standard"
+        end
       end
 
       def create_server_def
@@ -391,6 +478,7 @@ class Chef
           :availability_zone => locate_config_value(:availability_zone)
         }
         server_def[:subnet_id] = locate_config_value(:subnet_id) if vpc_mode?
+        server_def[:private_ip_address] = locate_config_value(:allocate_ip) if vpc_mode?
 
         if Chef::Config[:knife][:aws_user_data]
           begin
