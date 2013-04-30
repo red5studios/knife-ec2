@@ -250,7 +250,9 @@ class Chef
 
         if config[:associate_new_eip]
           begin
+            ui.info("Attempting to allocate a new EIP...")
             requested_elastic_ip = connection.allocate_address(eip_scope).body["publicIp"]
+            ui.info("Allocated new EIP: #{requested_elastic_ip}")
           rescue Fog::Compute::AWS::Error => e
             ui.error("Failed to allocate elastic IP: #{e.message}")
             exit 1
@@ -578,6 +580,7 @@ class Chef
       end
 
       def associate_eip(elastic_ip)
+        ui.info("Associating EIP #{elastic_ip.public_ip} to #{server.id}")
         connection.associate_address(server.id, elastic_ip.public_ip, nil, elastic_ip.allocation_id)
         @server.wait_for { public_ip_address == elastic_ip.public_ip }
       end
