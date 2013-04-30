@@ -318,7 +318,7 @@ class Chef
         tries = 6
         begin
           create_tags(hashed_tags) unless hashed_tags.empty?
-          associate_eip(elastic_ip) if (config[:associate_eip] || config[:associate_new_ip])
+          associate_eip(elastic_ip) if (config[:associate_eip] || config[:associate_new_eip])
         rescue Fog::Compute::AWS::NotFound => e
           raise if (tries -= 1) <= 0
           ui.warn("Server not ready yet, retrying action (retries left: #{tries})")
