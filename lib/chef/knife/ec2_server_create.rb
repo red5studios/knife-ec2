@@ -291,6 +291,14 @@ class Chef
         :description => "Path to the validation key",
         :proc => proc { |m| Chef::Config[:validation_key_url] = m }
 
+      option :uniquify,
+        :long => "--uniquify",
+        :short => "-U",
+        :description => "Append the unique portion of the server ID to the Name",
+        :boolean => true,
+        :default => false
+
+
       def run
         $stdout.sync = true
 
@@ -309,6 +317,11 @@ class Chef
         # Always set the Name tag
         unless hashed_tags.keys.include? "Name"
           hashed_tags["Name"] = locate_config_value(:chef_node_name) || @server.id
+        end
+
+        # Append the server in order to guarantee a unique name.
+        if config[:uniquify]
+          hashed_tags["Name"] << @server.id.split('-')[1]
         end
 
         printed_tags = hashed_tags.map{ |tag, val| "#{tag}: #{val}" }.join(", ")
