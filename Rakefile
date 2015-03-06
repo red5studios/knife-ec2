@@ -27,6 +27,7 @@ require 'rdoc/task'
 
 begin
   require 'sdoc'
+  require 'rdoc/task'
 
   RDoc::Task.new do |rdoc|
     rdoc.title = "Chef Ruby API Documentation"

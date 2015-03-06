@@ -45,13 +45,6 @@ class Chef
         :long => "--node-name NAME",
         :description => "The name of the node and client to delete, if it differs from the server name.  Only has meaning when used with the '--purge' option."
 
-      option :release_eip,
-        :short => "-R",
-        :long => "--release-eip",
-        :boolean => true,
-        :default => false,
-        :description => "Release the attached Elastic IP Address during termination."
-
       # Extracted from Chef::Knife.delete_object, because it has a
       # confirmation step built in... By specifying the '--purge'
       # flag (and also explicitly confirming the server destruction!)
@@ -67,39 +60,14 @@ class Chef
         end
       end
 
-      def release_eip(ip_address)
-        begin
-          ui.info("Searching for EIP: #{ip_address}")
-          eip = connection.addresses.get(ip_address)
-
-          # Disassociating EIP's in vpc requires public_ip to be nil
-          public_ip = eip.domain == "vpc" ? nil : eip.public_ip
-
-          confirm("Do you really want to release the Elastic IP \"#{ip_address}\" with allocation_id \"#{eip.allocation_id}\"")
-
-          # Check to ensure we are not allocated, or allocated to this server
-          unless eip.server_id == nil or eip.server_id == @server.id
-            ui.error("Server id \"#{eip.server_id}\" is associated with this elastic ip. We cannot delete it.")
-            exit 1
-          end
-          association_id = eip.attributes.fetch("associationId", nil)
-          connection.disassociate_address(public_ip, association_id)
-          ui.info("Waiting for Elastic IP to Disassociate")
-          eip.wait_for { print '.'; server_id == nil }
-          puts
-          eip.destroy
-
-          ui.warn("Released Elastic IP #{ip_address}")
-
-        rescue Fog::Compute::AWS::Error => e
-          ui.error("Failed to release elastic IP: #{e.message}")
-          return false
-        end
-      end
-
       def run
 
         validate!
+        if @name_args.empty? && config[:chef_node_name]
+          ui.info("no instance id is specific, trying to retrieve it from node name")
+          instance_id = fetch_instance_id(config[:chef_node_name])
+          @name_args << instance_id unless instance_id.nil?
+        end
 
         @name_args.each do |instance_id|
 
@@ -112,6 +80,7 @@ class Chef
             msg_pair("Region", connection.instance_variable_get(:@region))
             msg_pair("Availability Zone", @server.availability_zone)
             msg_pair("Security Groups", @server.groups.join(", "))
+            msg_pair("IAM Profile", iam_name_from_profile(@server.iam_instance_profile)) if @server.iam_instance_profile
             msg_pair("SSH Key", @server.key_name)
             msg_pair("Root Device Type", @server.root_device_type)
             msg_pair("Public DNS Name", @server.dns_name)
@@ -122,31 +91,49 @@ class Chef
             puts "\n"
             confirm("Do you really want to delete this server")
 
-            # Release the Elastic IP if it's asked of us
-            if config[:release_eip] and @server.public_ip_address != nil
-              release_eip(@server.public_ip_address)
-            else
-              ui.warn("Elastic IP address not released.") unless @server.public_ip_address.nil?
-            end
-
             @server.destroy
 
             ui.warn("Deleted server #{@server.id}")
 
             if config[:purge]
-              thing_to_delete = config[:chef_node_name] || instance_id
+              if config[:chef_node_name]
+                thing_to_delete = config[:chef_node_name]
+              else
+                thing_to_delete = fetch_node_name(instance_id)
+              end
               destroy_item(Chef::Node, thing_to_delete, "node")
               destroy_item(Chef::ApiClient, thing_to_delete, "client")
             else
               ui.warn("Corresponding node and client for the #{instance_id} server were not deleted and remain registered with the Chef Server")
             end
-
-          rescue NoMethodError => e
-            ui.error("Error while trying to delete'#{instance_id}': #{e}")
+          rescue NoMethodError
+            ui.error("Could not locate server '#{instance_id}'.  Please verify it was provisioned in the '#{locate_config_value(:region)}' region.")
           end
         end
       end
 
+      def fetch_node_name(instance_id)
+        result = query.search(:node,"ec2_instance_id:#{instance_id}")
+        unless result.first.empty?
+          result.first.first.name
+        else
+          instance_id
+        end
+      end
+
+      def fetch_instance_id(name)
+        result = query.search(:node,"name:#{name}")
+        unless result.first.empty?
+          node = result.first.first
+          if node.attribute?('ec2')
+            node['ec2']['instance_id']
+          end
+        end
+      end
+
+      def query
+        @query ||= Chef::Search::Query.new
+      end
     end
   end
 end

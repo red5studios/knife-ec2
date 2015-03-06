@@ -34,6 +34,11 @@ class Chef
             require 'chef/json_compat'
           end
 
+          option :aws_credential_file,
+            :long => "--aws-credential-file FILE",
+            :description => "File containing AWS credentials as used by aws cmdline tools",
+            :proc => Proc.new { |key| Chef::Config[:knife][:aws_credential_file] = key }
+
           option :aws_access_key_id,
             :short => "-A ID",
             :long => "--aws-access-key-id KEY",
@@ -50,17 +55,29 @@ class Chef
             :long => "--region REGION",
             :description => "Your AWS region",
             :proc => Proc.new { |key| Chef::Config[:knife][:region] = key }
+
+          option :use_iam_profile,
+            :long => "--use-iam-profile",
+            :description => "Use IAM profile assigned to current machine",
+            :boolean => true,
+            :default => false,
+            :proc => Proc.new { |key| Chef::Config[:knife][:use_iam_profile] = key }
         end
       end
 
       def connection
+        connection_settings = {
+          :provider => 'AWS',
+          :region => locate_config_value(:region)
+        }
+        if locate_config_value(:use_iam_profile)
+          connection_settings[:use_iam_profile] = true
+        else
+          connection_settings[:aws_access_key_id] = locate_config_value(:aws_access_key_id)
+          connection_settings[:aws_secret_access_key] = locate_config_value(:aws_secret_access_key)
+        end
         @connection ||= begin
-          connection = Fog::Compute.new(
-            :provider => 'AWS',
-            :aws_access_key_id => Chef::Config[:knife][:aws_access_key_id],
-            :aws_secret_access_key => Chef::Config[:knife][:aws_secret_access_key],
-            :region => locate_config_value(:region)
-          )
+          connection = Fog::Compute.new(connection_settings)
         end
       end
 
@@ -75,23 +92,56 @@ class Chef
         end
       end
 
+      def is_image_windows?
+        image_info = connection.images.get(@server.image_id)
+        return image_info.platform == 'windows'
+      end
+
       def validate!(keys=[:aws_access_key_id, :aws_secret_access_key])
         errors = []
 
-        keys.each do |k|
-          pretty_key = k.to_s.gsub(/_/, ' ').gsub(/\w+/){ |w| (w =~ /(ssh)|(aws)/i) ? w.upcase  : w.capitalize }
-          if Chef::Config[:knife][k].nil?
-            errors << "You did not provide a valid '#{pretty_key}' value."
-          end
-        end
+        unless locate_config_value(:use_iam_profile)
+          unless Chef::Config[:knife][:aws_credential_file].nil?
+            unless (Chef::Config[:knife].keys & [:aws_access_key_id, :aws_secret_access_key]).empty?
+              errors << "Either provide a credentials file or the access key and secret keys but not both."
+            end
+            # File format:
+            # AWSAccessKeyId=somethingsomethingdarkside
+            # AWSSecretKey=somethingsomethingcomplete
+            #               OR
+            # aws_access_key_id = somethingsomethingdarkside
+            # aws_secret_access_key = somethingsomethingdarkside
 
-        if errors.each{|e| ui.error(e)}.any?
-          exit 1
+            aws_creds = []
+            File.read(Chef::Config[:knife][:aws_credential_file]).each_line do | line |
+              aws_creds << line.split("=").map(&:strip) if line.include?("=")
+            end
+            entries = Hash[*aws_creds.flatten]
+            Chef::Config[:knife][:aws_access_key_id] = entries['AWSAccessKeyId'] || entries['aws_access_key_id']
+            Chef::Config[:knife][:aws_secret_access_key] = entries['AWSSecretKey'] || entries['aws_secret_access_key']
+          end
+
+          keys.each do |k|
+            pretty_key = k.to_s.gsub(/_/, ' ').gsub(/\w+/){ |w| (w =~ /(ssh)|(aws)/i) ? w.upcase  : w.capitalize }
+            if Chef::Config[:knife][k].nil?
+              errors << "You did not provide a valid '#{pretty_key}' value."
+            end
+          end
+
+          if errors.each{|e| ui.error(e)}.any?
+            exit 1
+          end
         end
       end
 
     end
+
+    def iam_name_from_profile(profile)
+      # The IAM profile object only contains the name as part of the arn
+      if profile && profile.key?('arn')
+        name = profile['arn'].split('/')[-1]
+      end
+      name ||= ''
+    end
   end
 end
-
-
